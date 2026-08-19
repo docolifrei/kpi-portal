@@ -1,21 +1,20 @@
 import pandas as pd
 import streamlit as st
 
-# Configure the Streamlit page layout
-st.set_page_config(page_title="Support KPI AI Portal", layout="wide")
+st.set_page_config(
+    page_title="Support KPI AI Portal", layout="wide", page_icon="📊"
+)
 st.title("📊 Customer Support KPI & AI Analytics Portal")
 
 # Interactive File Uploader
 uploaded_file = st.file_uploader("Upload raw CSV dataset", type=["csv"])
 
 if uploaded_file is not None:
-    # Read the dataset
+    # Read and prepare dataset
     df = pd.read_csv(uploaded_file)
-
-    # Convert the 'date' column to proper datetime format
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-    # Clean numeric columns to ensure proper math operations
+    # Numeric data cleanup
     numeric_cols = [
         "csat_score",
         "total_aht_duration_seconds",
@@ -26,19 +25,16 @@ if uploaded_file is not None:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Sidebar Filters
+    # Sidebar Options
     st.sidebar.header("Filter Options")
-
-    # Filter 1: Company selection
     companies = sorted(df["company"].dropna().unique())
     selected_company = st.sidebar.selectbox("Select Company", companies)
 
-    # Filter 2: Date range selection
     timeframe = st.sidebar.radio(
         "Select Timeframe", ["Last Week", "Last Month", "Last 3 Months"]
     )
 
-    # Define date range bounds based on dataset max date
+    # Date calculations
     max_date = df["date"].max()
     days_map = {"Last Week": 7, "Last Month": 30, "Last 3 Months": 90}
     days_count = days_map[timeframe]
@@ -46,10 +42,8 @@ if uploaded_file is not None:
     start_date = max_date - pd.Timedelta(days=days_count)
     previous_start = start_date - pd.Timedelta(days=days_count)
 
-    # Filter data for selected company
+    # Filtered slices
     company_df = df[df["company"] == selected_company]
-
-    # Current period vs Previous period slices for comparison
     current_df = company_df[
         (company_df["date"] >= start_date) & (company_df["date"] <= max_date)
     ]
@@ -66,57 +60,56 @@ if uploaded_file is not None:
     if current_df.empty:
         st.warning("No records found for the selected timeframe.")
     else:
-        # Define KPI configuration dictionary
+        # KPI Cards Display
         kpi_configs = [
             {
                 "label": "Total Ticket Volume",
                 "col": "ticket_id",
                 "type": "count",
-                "higher_is_better": False,
+                "better": False,
             },
             {
                 "label": "Avg CSAT Score",
                 "col": "csat_score",
                 "type": "mean",
-                "higher_is_better": True,
+                "better": True,
             },
             {
                 "label": "Avg Handle Time (sec)",
                 "col": "total_aht_duration_seconds",
                 "type": "mean",
-                "higher_is_better": False,
+                "better": False,
             },
             {
                 "label": "Avg Wait Time (sec)",
                 "col": "wait_time",
                 "type": "mean",
-                "higher_is_better": False,
+                "better": False,
             },
         ]
 
-        # Display KPIs in side-by-side columns
         cols = st.columns(len(kpi_configs))
-
         for idx, kpi in enumerate(kpi_configs):
             col_name = kpi["col"]
-
-            # Calculate current period metric
-            if kpi["type"] == "count":
-                curr_val = len(current_df)
-                prev_val = len(previous_df)
-            else:
-                curr_val = current_df[col_name].mean()
-                prev_val = (
+            curr_val = (
+                len(current_df)
+                if kpi["type"] == "count"
+                else current_df[col_name].mean()
+            )
+            prev_val = (
+                len(previous_df)
+                if kpi["type"] == "count"
+                else (
                     previous_df[col_name].mean() if not previous_df.empty else 0
                 )
+            )
 
-            # Calculate percentage change (delta)
-            if prev_val and prev_val > 0:
-                pct_change = ((curr_val - prev_val) / prev_val) * 100
-            else:
-                pct_change = 0.0
+            pct_change = (
+                ((curr_val - prev_val) / prev_val) * 100
+                if prev_val and prev_val > 0
+                else 0.0
+            )
 
-            # Render KPI Card
             with cols[idx]:
                 val_str = (
                     f"{curr_val:,.1f}"
@@ -130,9 +123,49 @@ if uploaded_file is not None:
                 )
 
         st.divider()
+
+        # Dynamic Interactive Charts Section
+        st.subheader("📈 Interactive Performance Trends")
+        tab1, tab2, tab3 = st.tabs(
+            ["Ticket Volume", "CSAT Score Trend", "Handle & Wait Times"]
+        )
+
+        # Prepare daily aggregated data frame
+        daily_df = (
+            current_df.groupby(current_df["date"].dt.date)
+            .agg(
+                {
+                    "ticket_id": "count",
+                    "csat_score": "mean",
+                    "total_aht_duration_seconds": "mean",
+                    "wait_time": "mean",
+                }
+            )
+            .rename(
+                columns={
+                    "ticket_id": "Daily Tickets",
+                    "csat_score": "CSAT Score",
+                    "total_aht_duration_seconds": "Avg Handle Time (s)",
+                    "wait_time": "Avg Wait Time (s)",
+                }
+            )
+        )
+
+        with tab1:
+            st.line_chart(daily_df[["Daily Tickets"]])
+
+        with tab2:
+            st.line_chart(daily_df[["CSAT Score"]])
+
+        with tab3:
+            st.line_chart(
+                daily_df[["Avg Handle Time (s)", "Avg Wait Time (s)"]]
+            )
+
+        st.divider()
         st.subheader("💡 AI Insights & Trend Highlights")
 
-        # Generate automated insights per KPI
+        # Automated Insights
         for kpi in kpi_configs:
             col_name = kpi["col"]
             curr_val = (
@@ -154,19 +187,17 @@ if uploaded_file is not None:
                 else 0
             )
             is_improvement = (
-                (pct_change > 0)
-                if kpi["higher_is_better"]
-                else (pct_change < 0)
+                (pct_change > 0) if kpi["better"] else (pct_change < 0)
             )
 
             if abs(pct_change) >= 2.0:
                 if is_improvement:
                     st.success(
-                        f"**Positive Trend ({kpi['label']}):** Shifted by **{pct_change:+.1f}%**. Actionable Insight: Support performance improved during this period; maintain current team workflows."
+                        f"**Positive Trend ({kpi['label']}):** Shifted by **{pct_change:+.1f}%**. Support performance improved; maintain current workflows."
                     )
                 else:
                     st.error(
-                        f"**Attention Needed ({kpi['label']}):** Shifted by **{pct_change:+.1f}%**. Actionable Insight: Negative trend detected; review agent staffing levels and queue resolution."
+                        f"**Attention Needed ({kpi['label']}):** Shifted by **{pct_change:+.1f}%**. Negative trend detected; review agent queue response times."
                     )
             else:
                 st.info(
